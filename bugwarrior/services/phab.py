@@ -7,6 +7,7 @@ from bugwarrior.services import IssueService, Issue
 # This comes from PyPI
 import phabricator
 
+from datetime import datetime, timedelta
 import logging
 log = logging.getLogger(__name__)
 
@@ -16,6 +17,11 @@ class PhabricatorIssue(Issue):
     URL = 'phabricatorurl'
     TYPE = 'phabricatortype'
     OBJECT_NAME = 'phabricatorid'
+    ASSIGNED = 'phabricatorassigned'
+    AUTHOR = 'phabricatorauthor'
+    CREATED_AT = 'phabricatorcreatedat'
+    ASSIGNED_TO_ME = 'phabricatorassignedtome'
+    STATUS = 'phabricatorstatus'
 
     UDAS = {
         TITLE: {
@@ -34,6 +40,27 @@ class PhabricatorIssue(Issue):
             'type': 'string',
             'label': 'Phabricator Object',
         },
+        AUTHOR: {
+            'type': 'string',
+            'label': 'Phabricator Author',
+        },
+        ASSIGNED: {
+            'type': 'string',
+            'label': 'Phabricator Assigned',
+        },
+        CREATED_AT: {
+            'type': 'date',
+            'label': 'Phabricator Created At',
+        },
+        ASSIGNED_TO_ME: {
+            'type': 'string',
+            'label': 'Phabricator Assigned To Me',
+            'values': "True,False",
+        },
+        STATUS: {
+            'type': 'string',
+            'label': 'Phabricator Status',
+        },
     }
     UNIQUE_KEY = (URL, )
 
@@ -47,15 +74,22 @@ class PhabricatorIssue(Issue):
     }
 
     def to_taskwarrior(self):
+        created = datetime.fromtimestamp(int(self.record['dateCreated']))
         return {
             'project': self.extra['project'],
             'priority': self.priority,
             'annotations': self.extra.get('annotations', []),
+            # one month later of created
+            'due': timedelta(days=30) + created,
 
             self.URL: self.record['uri'],
             self.TYPE: self.extra['type'],
             self.TITLE: self.record['title'],
             self.OBJECT_NAME: self.record['uri'].split('/')[-1],
+            self.ASSIGNED: self.record['ownerPHID'],
+            self.AUTHOR: self.record['authorPHID'],
+            self.CREATED_AT: created,
+            self.ASSIGNED_TO_ME: self.extra.get(self.ASSIGNED_TO_ME, "False"),
         }
 
     def get_default_description(self):
@@ -125,7 +159,7 @@ class PhabricatorService(IssueService):
                     tasks = self.api.maniphest.query(status='status-open', projectPHIDs=self.shown_project_phids)
                     tasks = tasks.items()
             else:
-                tasks = self.api.maniphest.query(status='status-open')
+                tasks = self.api.maniphest.query(status=('status-open',))
                 tasks = tasks.items()
         except phabricator.APIError as err:
             log.warn("Could not read tasks from Maniphest: %s" % err)
@@ -168,7 +202,13 @@ class PhabricatorService(IssueService):
             extra = {
                 'project': project,
                 'type': 'issue',
-                #'annotations': self.annotations(phid, issue)
+                'phabricatorassignedtome': str(task['ownerPHID'] in self.shown_user_phids),
+                'phabricatorpriority': task['priority'],
+                'phabricatorstatus': task['status'],
+                'phabricatorowner': task['ownerPHID'],
+                'phabricatorauthor': task['authorPHID'],
+
+                # 'annotations': self.annotations(phid, issue)
             }
 
             yield self.get_issue_for_record(task, extra)
